@@ -1,0 +1,7 @@
+.git
+.env
+.opencode
+openspec
+tmp
+coverage.out
+*.log

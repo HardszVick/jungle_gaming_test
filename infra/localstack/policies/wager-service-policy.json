@@ -1,0 +1,43 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ConsumeWagerTransactions",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ChangeMessageVisibility",
+        "sqs:ChangeMessageVisibilityBatch",
+        "sqs:DeleteMessage",
+        "sqs:DeleteMessageBatch",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:ReceiveMessage"
+      ],
+      "Resource": "arn:aws:sqs:us-east-1:000000000000:wager-transactions.fifo"
+    },
+    {
+      "Sid": "DiscoverWagerQueues",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl"
+      ],
+      "Resource": [
+        "arn:aws:sqs:us-east-1:000000000000:wager-transactions.fifo",
+        "arn:aws:sqs:us-east-1:000000000000:wager-transactions-dlq.fifo",
+        "arn:aws:sqs:us-east-1:000000000000:wager-events.fifo"
+      ]
+    },
+    {
+      "Sid": "PublishWagerEvents",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:SendMessage",
+        "sqs:SendMessageBatch"
+      ],
+      "Resource": "arn:aws:sqs:us-east-1:000000000000:wager-events.fifo"
+    }
+  ]
+}

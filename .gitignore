@@ -1,0 +1,41 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+
+# Go build and test artifacts
+/bin/
+/build/
+/dist/
+/service
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage/
+coverage.*
+*.coverprofile
+*.prof
+*.pprof
+
+# Runtime and temporary files
+/tmp/
+/temp/
+/.cache/
+*.log
+*.pid
+
+# Editors
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# Operating systems
+.DS_Store
+Thumbs.db

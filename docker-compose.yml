@@ -1,0 +1,173 @@
+name: ${COMPOSE_PROJECT_NAME:-wager-service}
+
+x-app-environment: &app-environment
+  DATABASE_URL: ${DATABASE_URL:-postgres://${APP_DATABASE_USER}:${APP_DATABASE_PASSWORD}@postgres:5432/${APP_DATABASE_NAME}?sslmode=disable}
+  HTTP_ADDR: :${APP_HTTP_PORT:-8080}
+  INTERNAL_HTTP_ADDR: :${APP_METRICS_PORT:-9090}
+  OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}
+  OIDC_AUDIENCE: ${OIDC_AUDIENCE:-backend-api}
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  AWS_PROFILE: runtime
+  AWS_SHARED_CREDENTIALS_FILE: /run/secrets/aws/credentials
+  AWS_EC2_METADATA_DISABLED: "true"
+  AWS_ENDPOINT_URL: http://localstack:4566
+  SQS_TRANSACTIONS_QUEUE: ${SQS_INPUT_QUEUE_NAME:-wager-transactions.fifo}
+  SQS_TRANSACTIONS_DLQ: ${SQS_DLQ_NAME:-wager-transactions-dlq.fifo}
+  SQS_EVENTS_QUEUE: ${SQS_OUTPUT_QUEUE_NAME:-wager-events.fifo}
+  SQS_REDRIVE_MAX_RECEIVE_COUNT: ${SQS_REDRIVE_MAX_RECEIVE_COUNT:-5}
+  COMPONENTS: ${COMPONENTS:-http,sqs-consumer,outbox,pending-reference}
+  SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-30s}
+
+x-migration-environment: &migration-environment
+  DATABASE_URL: ${MIGRATION_DATABASE_URL:-${DATABASE_URL:-postgres://${APP_DATABASE_MIGRATION_USER}:${APP_DATABASE_MIGRATION_PASSWORD}@postgres:5432/${APP_DATABASE_NAME}?sslmode=disable&options=-c%20app.application_role%3D${APP_DATABASE_USER}}}
+  MIGRATIONS_DIR: /app/migrations
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_DB: postgres
+      APP_DATABASE_MIGRATION_USER: ${APP_DATABASE_MIGRATION_USER}
+      APP_DATABASE_MIGRATION_PASSWORD: ${APP_DATABASE_MIGRATION_PASSWORD}
+      APP_DATABASE_USER: ${APP_DATABASE_USER}
+      APP_DATABASE_PASSWORD: ${APP_DATABASE_PASSWORD}
+      APP_DATABASE_NAME: ${APP_DATABASE_NAME}
+      KEYCLOAK_DATABASE_USER: ${KEYCLOAK_DATABASE_USER}
+      KEYCLOAK_DATABASE_PASSWORD: ${KEYCLOAK_DATABASE_PASSWORD}
+      KEYCLOAK_DATABASE_NAME: ${KEYCLOAK_DATABASE_NAME}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init/10-create-databases.sh:/docker-entrypoint-initdb.d/10-create-databases.sh:ro
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.6
+    entrypoint: ["/opt/keycloak/import-realm.sh"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DATABASE_NAME}
+      KC_DB_USERNAME: ${KEYCLOAK_DATABASE_USER}
+      KC_DB_PASSWORD: ${KEYCLOAK_DATABASE_PASSWORD}
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_PORT: ${KEYCLOAK_HTTP_PORT:-8081}
+      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL}
+      PROVIDER_A_CLIENT_SECRET: ${PROVIDER_A_CLIENT_SECRET}
+      PROVIDER_B_CLIENT_SECRET: ${PROVIDER_B_CLIENT_SECRET}
+      INTERNAL_SERVICE_CLIENT_SECRET: ${INTERNAL_SERVICE_CLIENT_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          bash -ec 'exec 3<>/dev/tcp/127.0.0.1/9000;
+          printf "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3;
+          grep -q "200 OK" <&3'
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    volumes:
+      - ./infra/keycloak/import-realm.sh:/opt/keycloak/import-realm.sh:ro
+      - ./infra/keycloak/realm.json:/opt/keycloak/realm-templates/wager-realm.json:ro
+    ports:
+      - "${KEYCLOAK_HOST_PORT:-8081}:${KEYCLOAK_HTTP_PORT:-8081}"
+    networks:
+      default:
+        aliases:
+          - keycloak.localhost
+    restart: unless-stopped
+
+  localstack:
+    image: ${MINISTACK_IMAGE:-ministackorg/ministack:1.5.26@sha256:f90981c85c9b431d819afa8bdad9735d1434e22e42f1deb8c99a0bcaf30363e7}
+    environment:
+      SERVICES: sqs,iam
+      AUTH: "true"
+      MINISTACK_HOST: localstack
+      MINISTACK_ACCOUNT_ID: ${AWS_ACCOUNT_ID:-000000000000}
+      PERSIST_STATE: "1"
+      STATE_DIR: /var/lib/localstack/ministack-state
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID:-000000000000}
+      SQS_INPUT_QUEUE_NAME: ${SQS_INPUT_QUEUE_NAME:-wager-transactions.fifo}
+      SQS_DLQ_NAME: ${SQS_DLQ_NAME:-wager-transactions-dlq.fifo}
+      SQS_OUTPUT_QUEUE_NAME: ${SQS_OUTPUT_QUEUE_NAME:-wager-events.fifo}
+      SQS_VISIBILITY_TIMEOUT: ${SQS_VISIBILITY_TIMEOUT:-60}
+      SQS_WAIT_TIME_SECONDS: ${SQS_WAIT_TIME_SECONDS:-20}
+      SQS_REDRIVE_MAX_RECEIVE_COUNT: ${SQS_REDRIVE_MAX_RECEIVE_COUNT:-5}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+           awslocal sqs get-queue-url --queue-name "$${SQS_INPUT_QUEUE_NAME}" >/dev/null &&
+           awslocal sqs get-queue-url --queue-name "$${SQS_DLQ_NAME}" >/dev/null &&
+           awslocal sqs get-queue-url --queue-name "$${SQS_OUTPUT_QUEUE_NAME}" >/dev/null &&
+           test -s /var/lib/localstack/runtime-credentials/credentials &&
+           test -s /var/lib/localstack/producer-credentials/credentials
+      interval: 5s
+      timeout: 15s
+      retries: 30
+      start_period: 10s
+    volumes:
+      - ministack-data:/var/lib/localstack
+      - ministack-runtime-credentials:/var/lib/localstack/runtime-credentials
+      - ministack-producer-credentials:/var/lib/localstack/producer-credentials
+      - ./infra/localstack/init/10-provision-sqs.sh:/etc/localstack/init/ready.d/10-provision-sqs.sh:ro
+    ports:
+      - "${LOCALSTACK_HOST_PORT:-4566}:4566"
+    restart: unless-stopped
+
+  migrations:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/app/service"]
+    command: ["migrate", "up"]
+    environment:
+      <<: *migration-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/app/service"]
+    environment:
+      <<: *app-environment
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    ports:
+      - target: ${APP_HTTP_PORT:-8080}
+        protocol: tcp
+    volumes:
+      - ministack-runtime-credentials:/run/secrets/aws:ro
+    deploy:
+      replicas: ${APP_REPLICAS:-3}
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  ministack-data:
+  ministack-runtime-credentials:
+  ministack-producer-credentials:

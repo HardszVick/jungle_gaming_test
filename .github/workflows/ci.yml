@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod verify
+      - name: Check tidy modules
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: Check formatting
+        run: |
+          git ls-files -z '*.go' | xargs -0 gofmt -l > /tmp/unformatted-go
+          test ! -s /tmp/unformatted-go
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./... -count=1
+      - run: go test -race ./... -count=1
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -tags=integration ./... -count=1
+      - run: go test -race -tags=integration ./... -count=1
+
+  delivery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: make verify-isolated

@@ -1,0 +1,37 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageTemporaryWagerQueues",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ChangeMessageVisibility",
+        "sqs:CreateQueue",
+        "sqs:DeleteMessage",
+        "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:ListQueueTags",
+        "sqs:PurgeQueue",
+        "sqs:ReceiveMessage",
+        "sqs:SendMessage",
+        "sqs:SetQueueAttributes",
+        "sqs:TagQueue",
+        "sqs:UntagQueue"
+      ],
+      "Resource": "arn:aws:sqs:us-east-1:${aws:PrincipalAccount}:wager-test-*"
+    },
+    {
+      "Sid": "DiscoverTemporaryWagerQueues",
+      "Effect": "Allow",
+      "Action": "sqs:ListQueues",
+      "Resource": "*"
+    },
+    {
+      "Sid": "CreateScopedTestSessions",
+      "Effect": "Allow",
+      "Action": "sts:GetFederationToken",
+      "Resource": "*"
+    }
+  ]
+}
